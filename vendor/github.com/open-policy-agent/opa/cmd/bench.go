@@ -13,28 +13,27 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/open-policy-agent/opa/ast"
+	"github.com/open-policy-agent/opa/v1/ast"
 
-	"github.com/open-policy-agent/opa/server/types"
+	"github.com/open-policy-agent/opa/v1/server/types"
 
-	"github.com/open-policy-agent/opa/logging"
-	"github.com/open-policy-agent/opa/runtime"
+	"github.com/open-policy-agent/opa/v1/logging"
+	"github.com/open-policy-agent/opa/v1/runtime"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
 	"github.com/open-policy-agent/opa/cmd/internal/env"
-	"github.com/open-policy-agent/opa/compile"
 	"github.com/open-policy-agent/opa/internal/presentation"
-	"github.com/open-policy-agent/opa/metrics"
-	"github.com/open-policy-agent/opa/rego"
-	"github.com/open-policy-agent/opa/util"
+	"github.com/open-policy-agent/opa/v1/compile"
+	"github.com/open-policy-agent/opa/v1/metrics"
+	"github.com/open-policy-agent/opa/v1/rego"
+	"github.com/open-policy-agent/opa/v1/util"
 )
 
 // benchmarkCommandParams are a superset of evalCommandParams
@@ -62,8 +61,9 @@ func newBenchmarkEvalParams() benchmarkCommandParams {
 				evalPrettyOutput,
 				benchmarkGoBenchOutput,
 			}),
-			target: util.NewEnumFlag(compile.TargetRego, []string{compile.TargetRego, compile.TargetWasm}),
-			schema: &schemaFlags{},
+			target:       util.NewEnumFlag(compile.TargetRego, []string{compile.TargetRego, compile.TargetWasm}),
+			schema:       &schemaFlags{},
+			capabilities: newcapabilitiesFlag(),
 		},
 		gracefulShutdownPeriod: 10,
 	}
@@ -163,6 +163,16 @@ func benchMain(args []string, params benchmarkCommandParams, w io.Writer, r benc
 		errRender := renderBenchmarkError(params, err, w)
 		return 1, errRender
 	}
+
+	resultHandler := rego.GenerateJSON(func(*ast.Term, *rego.EvalContext) (interface{}, error) {
+		// Do nothing with the result, as we are only interested in benchmarking evaluation —
+		// not the potentially slow process of rendering the result.
+		// Undefined / empty results will still be handled normally (fail the benchmark unless --fail
+		// is set to false).
+		return nil, nil
+	})
+
+	ectx.regoArgs = append(ectx.regoArgs, resultHandler)
 
 	var benchFunc func(context.Context, ...rego.EvalOption) error
 	rg := rego.New(ectx.regoArgs...)
@@ -607,12 +617,7 @@ func renderBenchmarkResult(params benchmarkCommandParams, br testing.BenchmarkRe
 			})
 		}
 
-		var keys []string
-		for k := range br.Extra {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		for _, k := range util.KeysSorted(br.Extra) {
 			data = append(data, []string{k, prettyFormatFloat(br.Extra[k])})
 		}
 

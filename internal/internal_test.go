@@ -22,6 +22,8 @@ import (
 	ext_core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	ext_authz_v2 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v2"
 	ext_authz "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
+	ext_type_v2 "github.com/envoyproxy/go-control-plane/envoy/type"
+	ext_type_v3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	_structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/code"
@@ -1520,6 +1522,50 @@ func TestCheckAllowBooleanDecisionDynamicMetadataDecisionID(t *testing.T) {
 	assertDynamicMetadataDecisionID(t, output.GetDynamicMetadata())
 }
 
+func TestCheckAllowObjectDecisionReqQueryParamsToRemove(t *testing.T) {
+	var req ext_authz.CheckRequest
+	if err := util.Unmarshal([]byte(exampleAllowedRequest), &req); err != nil {
+		panic(err)
+	}
+
+	module := `
+		package envoy.authz
+
+		default allow = true
+
+		query_parameters_to_remove := ["foo", "bar"]
+
+		result["allowed"] = allow
+		result["query_parameters_to_remove"] = query_parameters_to_remove`
+
+	server := testAuthzServerWithModule(module, "envoy/authz/result", nil, withCustomLogger(&testPlugin{}))
+	ctx := context.Background()
+	output, err := server.Check(ctx, &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if output.Status.Code != int32(code.Code_OK) {
+		t.Fatalf("Expected request to be allowed but got: %v", output)
+	}
+
+	response := output.GetOkResponse()
+	if response == nil {
+		t.Fatal("Expected OkHttpResponse struct but got nil")
+	}
+
+	queryParams := response.GetQueryParametersToRemove()
+	if len(queryParams) != 2 {
+		t.Fatalf("Expected two query params but got %v", len(queryParams))
+	}
+
+	expectedQueryParams := []string{"foo", "bar"}
+
+	if !reflect.DeepEqual(expectedQueryParams, queryParams) {
+		t.Fatalf("Expected query params %v but got %v", expectedQueryParams, queryParams)
+	}
+}
+
 func TestCheckAllowObjectDecisionReqHeadersToRemove(t *testing.T) {
 	var req ext_authz.CheckRequest
 	if err := util.Unmarshal([]byte(exampleAllowedRequestParsedPath), &req); err != nil {
@@ -1666,15 +1712,29 @@ func TestCheckAllowObjectDecisionMultiValuedHeaders(t *testing.T) {
 		t.Fatalf("Expected two headers to add but got %v", headersToAdd)
 	}
 
+	expected := []*ext_core.HeaderValueOption{
+		{
+			Header: &ext_core.HeaderValue{
+				Key:   "x",
+				Value: "hello",
+			},
+		},
+		{
+			Header: &ext_core.HeaderValue{
+				Key:   "x",
+				Value: "world",
+			},
+		},
+	}
+
+	if !reflect.DeepEqual(expected, headersToAdd) {
+		t.Fatal("Unexpected response_headers_to_add")
+	}
+
 	headers := response.GetHeaders()
 	if len(headers) != 0 {
 		t.Fatalf("Expected no headers but got %v", len(headers))
 	}
-
-	expectedHeaders := http.Header{}
-	expectedHeaders.Set("x", "hello")
-	expectedHeaders.Add("x", "world")
-	assertHeaderValues(t, expectedHeaders, headersToAdd)
 }
 
 func TestCheckAllowObjectDecision(t *testing.T) {
@@ -2096,7 +2156,7 @@ func TestPrometheusMetrics(t *testing.T) {
 
 func TestLogWithASTError(t *testing.T) {
 	server := testAuthzServer(nil, withCustomLogger(&testPlugin{}))
-	err := server.log(context.Background(), nil, &envoyauth.EvalResult{}, &ast.Error{Code: "foo"})
+	err := server.logDecision(context.Background(), nil, &envoyauth.EvalResult{}, &ast.Error{Code: "foo"})
 	if err != nil {
 		panic(err)
 	}
@@ -2107,7 +2167,7 @@ func TestLogWithCancelError(t *testing.T) {
 	customLogger := &testPlugin{}
 
 	server := testAuthzServer(nil, withCustomLogger(customLogger))
-	err := server.log(context.Background(), nil, &envoyauth.EvalResult{}, &topdown.Error{
+	err := server.logDecision(context.Background(), nil, &envoyauth.EvalResult{}, &topdown.Error{
 		Code:    topdown.CancelErr,
 		Message: "caller cancelled query execution",
 	})
@@ -2241,31 +2301,6 @@ func assertHeaders(t *testing.T, actualHeaders []*ext_core.HeaderValueOption, ex
 			if expVal != value {
 				t.Fatalf("Expected value for header \"%v\" is \"%v\" but got \"%v\"", key, expVal, value)
 			}
-		}
-	}
-}
-
-func assertHeaderValues(t *testing.T, expectedHeaders http.Header, headersToAdd []*ext_core.HeaderValueOption) {
-	t.Helper()
-	for _, header := range headersToAdd {
-		key := header.GetHeader().GetKey()
-		value := header.GetHeader().GetValue()
-
-		expectedValues := expectedHeaders[key]
-		if expectedValues == nil {
-			t.Fatalf("unexpected header '%s'", key)
-		}
-
-		found := false
-		for _, expectedValue := range expectedValues {
-			if expectedValue == value {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			t.Fatalf("unexpected value '%s' for header '%s'", value, key)
 		}
 	}
 }

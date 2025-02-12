@@ -13,12 +13,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/open-policy-agent/opa/ast"
-	astJSON "github.com/open-policy-agent/opa/ast/json"
 	"github.com/open-policy-agent/opa/cmd/internal/env"
 	pr "github.com/open-policy-agent/opa/internal/presentation"
-	"github.com/open-policy-agent/opa/loader"
-	"github.com/open-policy-agent/opa/util"
+	"github.com/open-policy-agent/opa/v1/ast"
+	astJSON "github.com/open-policy-agent/opa/v1/ast/json"
+	"github.com/open-policy-agent/opa/v1/loader"
+	"github.com/open-policy-agent/opa/v1/util"
 )
 
 const (
@@ -90,7 +90,7 @@ func parse(args []string, params *parseParams, stdout io.Writer, stderr io.Write
 		RegoVersion:       params.regoVersion(),
 	}
 	if exposeLocation {
-		parserOpts.JSONOptions = &astJSON.Options{
+		astJSON.SetOptions(astJSON.Options{
 			MarshalOptions: astJSON.MarshalOptions{
 				IncludeLocationText: true,
 				IncludeLocation: astJSON.NodeToggle{
@@ -108,7 +108,8 @@ func parse(args []string, params *parseParams, stdout io.Writer, stderr io.Write
 					AnnotationsRef: true,
 				},
 			},
-		}
+		})
+		defer astJSON.SetOptions(astJSON.Defaults())
 	}
 
 	result, err := loader.RegoWithOpts(args[0], parserOpts)
